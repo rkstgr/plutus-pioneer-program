@@ -47,7 +47,22 @@ PlutusTx.unstableMakeIsData ''VestingDatum
 -- This should validate if either beneficiary1 has signed the transaction and the current slot is before or at the deadline
 -- or if beneficiary2 has signed the transaction and the deadline has passed.
 mkValidator :: VestingDatum -> () -> ScriptContext -> Bool
-mkValidator _ _ _ = False -- FIX ME!
+mkValidator dat () ctx
+  | signedByBeneficiary1 && not deadlineReached = True
+  | signedByBeneficiary2 &&     deadlineReached = True
+  | otherwise                                   = False
+    where
+      info :: TxInfo
+      info = scriptContextTxInfo ctx
+
+      signedByBeneficiary1 :: Bool
+      signedByBeneficiary1 = txSignedBy info $ unPaymentPubKeyHash $ beneficiary1 dat
+
+      signedByBeneficiary2 :: Bool
+      signedByBeneficiary2 = txSignedBy info $ unPaymentPubKeyHash $ beneficiary2 dat
+
+      deadlineReached :: Bool
+      deadlineReached = before (deadline dat) (txInfoValidRange info)
 
 data Vesting
 instance Scripts.ValidatorTypes Vesting where
@@ -102,6 +117,7 @@ grab = do
         utxos2 = Map.filter (isSuitable $ \dat -> beneficiary2 dat == pkh && now >  deadline dat) utxos
     logInfo @P.String $ printf "found %d gift(s) to grab" (Map.size utxos1 P.+ Map.size utxos2)
     unless (Map.null utxos1) $ do
+        logInfo @P.String $ printf "[1] found %d gift(s) to grab" (Map.size utxos1)
         let orefs   = fst <$> Map.toList utxos1
             lookups = Constraints.unspentOutputs utxos1 P.<>
                       Constraints.otherScript validator
@@ -110,11 +126,12 @@ grab = do
                       Constraints.mustValidateIn (to now)
         void $ submitTxConstraintsWith @Void lookups tx
     unless (Map.null utxos2) $ do
+        logInfo @P.String $ printf "[2] found %d gift(s) to grab" (Map.size utxos2)
         let orefs   = fst <$> Map.toList utxos2
             lookups = Constraints.unspentOutputs utxos2 P.<>
                       Constraints.otherScript validator
             tx :: TxConstraints Void Void
-            tx      = mconcat [Constraints.mustSpendScriptOutput oref $ unitRedeemer | oref <- orefs] P.<>
+            tx      = mconcat [Constraints.mustSpendScriptOutput oref unitRedeemer | oref <- orefs] P.<>
                       Constraints.mustValidateIn (from now)
         void $ submitTxConstraintsWith @Void lookups tx
   where

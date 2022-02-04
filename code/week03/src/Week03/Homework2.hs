@@ -14,7 +14,7 @@
 module Week03.Homework2 where
 
 import           Control.Monad        hiding (fmap)
-import           Data.Aeson           (ToJSON, FromJSON)
+import           Data.Aeson           (ToJSON, FromJSON, Value (Bool))
 import           Data.Map             as Map
 import           Data.Text            (Text)
 import           Data.Void            (Void)
@@ -35,9 +35,23 @@ import           Text.Printf          (printf)
 
 {-# OPTIONS_GHC -fno-warn-unused-imports #-}
 
+
+-- Original vesting:
+-- 1. The beneficiary is a params of the contract
+-- 2. The deadline is a contract datum
 {-# INLINABLE mkValidator #-}
 mkValidator :: PaymentPubKeyHash -> POSIXTime -> () -> ScriptContext -> Bool
-mkValidator _ _ _ _ = False -- FIX ME!
+mkValidator h d () ctx =    traceIfFalse "beneficiary's signature missing" signedByBeneficiary &&
+                            traceIfFalse "deadline not reached" deadlineReached
+    where
+        info :: TxInfo
+        info = scriptContextTxInfo ctx
+
+        signedByBeneficiary :: Bool
+        signedByBeneficiary = txSignedBy info $ unPaymentPubKeyHash h
+
+        deadlineReached :: Bool
+        deadlineReached = before d $ txInfoValidRange info
 
 data Vesting
 instance Scripts.ValidatorTypes Vesting where
@@ -45,13 +59,17 @@ instance Scripts.ValidatorTypes Vesting where
     type instance RedeemerType Vesting = ()
 
 typedValidator :: PaymentPubKeyHash -> Scripts.TypedValidator Vesting
-typedValidator = undefined -- IMPLEMENT ME!
+typedValidator h = Scripts.mkTypedValidator @Vesting
+    ($$(PlutusTx.compile [|| mkValidator ||]) `PlutusTx.applyCode` PlutusTx.liftCode h)
+    $$(PlutusTx.compile [|| wrap ||])
+  where
+    wrap = Scripts.wrapValidator @POSIXTime @()
 
 validator :: PaymentPubKeyHash -> Validator
-validator = undefined -- IMPLEMENT ME!
+validator = Scripts.validatorScript . typedValidator
 
 scrAddress :: PaymentPubKeyHash -> Ledger.Address
-scrAddress = undefined -- IMPLEMENT ME!
+scrAddress = scriptAddress . validator
 
 data GiveParams = GiveParams
     { gpBeneficiary :: !PaymentPubKeyHash
